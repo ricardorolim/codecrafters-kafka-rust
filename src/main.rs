@@ -4,6 +4,10 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
+enum ApiVersionsError {
+    UnsupportedVersion = 35,
+}
+
 #[allow(dead_code)]
 struct RequestHeader {
     request_api_key: u16,
@@ -26,7 +30,7 @@ fn parse_request_header(message: &[u8]) -> RequestHeader {
     };
 }
 
-fn process(mut stream: TcpStream) {
+fn handle(mut stream: TcpStream) {
     let mut message_size = [0; 4];
     stream.read_exact(&mut message_size).unwrap();
 
@@ -35,12 +39,19 @@ fn process(mut stream: TcpStream) {
     stream.read_exact(&mut message).unwrap();
 
     let header = parse_request_header(&message);
+    send_response(stream, header.correlation_id);
+}
 
+fn send_response(mut stream: TcpStream, correlation_id: u32) {
+    // send response
     let message_size = 0 as u32;
     stream.write(&message_size.to_be_bytes()).unwrap();
 
-    let correlation_id = header.correlation_id;
+    let correlation_id = correlation_id;
     stream.write(&correlation_id.to_be_bytes()).unwrap();
+
+    let error_code = ApiVersionsError::UnsupportedVersion as u16;
+    stream.write(&error_code.to_be_bytes()).unwrap();
 }
 
 fn main() {
@@ -49,7 +60,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                process(stream);
+                handle(stream);
             }
             Err(e) => {
                 println!("error: {}", e);
