@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
+use core::panic;
 use std::{
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
 };
 
@@ -82,18 +83,26 @@ fn parse_request_header(message: &[u8]) -> RequestHeader {
 }
 
 fn handle(mut stream: TcpStream) {
-    let mut message_size = [0; 4];
-    stream.read_exact(&mut message_size).unwrap();
+    loop {
+        let mut message_size = [0; 4];
+        if let Err(err) = stream.read_exact(&mut message_size) {
+            if err.kind() == ErrorKind::UnexpectedEof {
+                break;
+            } else {
+                panic!("Error reading message: {:?}", err);
+            }
+        }
 
-    let size: usize = i32::from_be_bytes(message_size).try_into().unwrap();
-    let mut message = vec![0; size];
-    stream.read_exact(&mut message).unwrap();
+        let size: usize = i32::from_be_bytes(message_size).try_into().unwrap();
+        let mut message = vec![0; size];
+        stream.read_exact(&mut message).unwrap();
 
-    let header = parse_request_header(&message);
-    send_api_versions_response(stream, &header);
+        let header = parse_request_header(&message);
+        send_api_versions_response(&mut stream, &header);
+    }
 }
 
-fn send_api_versions_response(mut stream: TcpStream, header: &RequestHeader) {
+fn send_api_versions_response(stream: &mut TcpStream, header: &RequestHeader) {
     let error_code = if header.request_api_version >= 0 && header.request_api_version <= 4 {
         ApiVersionsError::NoError
     } else {
