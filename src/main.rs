@@ -15,7 +15,6 @@ struct ApiVersionsV4Response {
     error_code: i16,
     api_keys: Vec<ApiKeys>,
     throttle_time_ms: i32,
-    tag_buffer: i8,
 }
 
 impl ApiVersionsV4Response {
@@ -29,7 +28,7 @@ impl ApiVersionsV4Response {
             buffer.extend_from_slice(&api_key.encode());
         }
         buffer.extend_from_slice(&self.throttle_time_ms.to_be_bytes());
-        buffer.extend_from_slice(&self.tag_buffer.to_be_bytes());
+        buffer.extend_from_slice(&0i8.to_be_bytes());
 
         buffer
     }
@@ -39,7 +38,6 @@ struct ApiKeys {
     api_key: i16,
     min_version: i16,
     max_version: i16,
-    tag_buffer: i8,
 }
 
 impl ApiKeys {
@@ -49,7 +47,7 @@ impl ApiKeys {
         buffer.extend_from_slice(&self.api_key.to_be_bytes());
         buffer.extend_from_slice(&self.min_version.to_be_bytes());
         buffer.extend_from_slice(&self.max_version.to_be_bytes());
-        buffer.extend_from_slice(&self.tag_buffer.to_be_bytes());
+        buffer.extend_from_slice(&0i8.to_be_bytes());
 
         buffer
     }
@@ -112,14 +110,19 @@ fn send_api_versions_response(stream: &mut TcpStream, header: &RequestHeader) {
 
     let body = ApiVersionsV4Response {
         error_code: error_code as i16,
-        api_keys: vec![ApiKeys {
-            api_key: 18,
-            min_version: 0,
-            max_version: 4,
-            tag_buffer: 0,
-        }],
+        api_keys: vec![
+            ApiKeys {
+                api_key: 18,
+                min_version: 0,
+                max_version: 4,
+            },
+            ApiKeys {
+                api_key: 75,
+                min_version: 0,
+                max_version: 0,
+            },
+        ],
         throttle_time_ms: 0,
-        tag_buffer: 0,
     }
     .encode();
 
