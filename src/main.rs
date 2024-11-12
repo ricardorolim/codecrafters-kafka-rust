@@ -3,6 +3,7 @@ use core::panic;
 use std::{
     io::{ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
+    thread,
 };
 
 enum ApiVersionsError {
@@ -136,7 +137,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                handle(stream);
+                thread::spawn(|| handle(stream));
             }
             Err(e) => {
                 println!("error: {}", e);
