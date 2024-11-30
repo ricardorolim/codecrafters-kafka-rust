@@ -47,6 +47,7 @@ struct ResponseHeader {
 }
 
 enum ApiKey {
+    Fetch = 1,
     ApiVersions = 18,
     DescribeTopicPartitions = 75,
 }
@@ -141,6 +142,11 @@ fn handle_apiversions(header: &RequestHeader, _body: &ApiVersionsRequest) -> Api
     ApiVersionsResponse {
         error_code: error_code as i16,
         api_keys: vec![
+            ApiKeys {
+                api_key: ApiKey::Fetch as i16,
+                min_version: 0,
+                max_version: 16,
+            },
             ApiKeys {
                 api_key: ApiKey::ApiVersions as i16,
                 min_version: 0,
