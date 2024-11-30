@@ -19,9 +19,9 @@ use crate::{
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct ClusterMetadataLog {
-    pub logfile: String,
-    pub batches: Vec<Batch>,
+    logfile: String,
     loaded: bool,
+    pub batches: Vec<Batch>,
 }
 
 impl ClusterMetadataLog {

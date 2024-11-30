@@ -188,10 +188,6 @@ fn handle_describe_topic_partitions(
             }
         }
         if let RecordBody::Partition(partition) = record {
-            if topic_error_code != ErrorCode::NoError {
-                break;
-            }
-
             if partition.topic_id == topic_id {
                 let resp_partition = Partition {
                     error_code: ErrorCode::NoError as i16,
