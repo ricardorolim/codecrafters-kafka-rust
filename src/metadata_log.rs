@@ -45,7 +45,7 @@ impl ClusterMetadataLog {
         let mut batches = Vec::new();
 
         while !reader.fill_buf()?.is_empty() {
-            batches.push(Batch::read(&mut reader)?);
+            batches.push(Batch::parse(&mut reader)?);
         }
 
         self.batches = batches;
@@ -82,7 +82,7 @@ pub struct Batch {
 }
 
 impl Batch {
-    pub fn read(reader: &mut impl Read) -> Result<Batch> {
+    pub fn parse(reader: &mut impl Read) -> Result<Batch> {
         Ok(Batch {
             base_offset: parse_int64(reader)?,
             base_length: parse_int32(reader)?,
@@ -97,7 +97,7 @@ impl Batch {
             producer_epoch: parse_int16(reader)?,
             base_sequence: parse_int32(reader)?,
             records: (0..parse_int32(reader)?)
-                .map(|_| Record::read(reader).unwrap())
+                .map(|_| Record::parse(reader).unwrap())
                 .collect(),
         })
     }
@@ -117,7 +117,7 @@ pub struct Record {
 }
 
 impl Record {
-    pub fn read(reader: &mut impl Read) -> Result<Record> {
+    pub fn parse(reader: &mut impl Read) -> Result<Record> {
         Ok(Record {
             length: parse_varint(reader)?,
             attributes: parse_int8(reader)?,
@@ -125,7 +125,7 @@ impl Record {
             offset_delta: parse_varint(reader)?,
             key: Some(parse_compact_string(reader)?),
             value_length: parse_varint(reader)?,
-            value: RecordValue::read(reader)?,
+            value: RecordValue::parse(reader)?,
             headers_array_count: parse_unsigned_varint(reader)?,
         })
     }
@@ -140,13 +140,15 @@ pub struct RecordValue {
 }
 
 impl RecordValue {
-    fn read(reader: &mut impl Read) -> Result<RecordValue> {
-        let header = RecordHeader::read(reader)?;
+    fn parse(reader: &mut impl Read) -> Result<RecordValue> {
+        let header = RecordHeader::parse(reader)?;
 
         let body = match header.rtype {
-            RecordType::Topic => RecordBody::Topic(TopicRecord::read(reader)?),
-            RecordType::Partition => RecordBody::Partition(PartitionRecord::read(reader)?),
-            RecordType::FeatureLevel => RecordBody::FeatureLevel(FeatureLevelRecord::read(reader)?),
+            RecordType::Topic => RecordBody::Topic(TopicRecord::parse(reader)?),
+            RecordType::Partition => RecordBody::Partition(PartitionRecord::parse(reader)?),
+            RecordType::FeatureLevel => {
+                RecordBody::FeatureLevel(FeatureLevelRecord::parse(reader)?)
+            }
         };
 
         Ok(RecordValue {
@@ -166,10 +168,10 @@ pub struct RecordHeader {
 }
 
 impl RecordHeader {
-    pub fn read(reader: &mut impl Read) -> Result<Self> {
+    fn parse(reader: &mut impl Read) -> Result<Self> {
         Ok(RecordHeader {
             frame_version: parse_int8(reader)?,
-            rtype: RecordType::read(reader)?,
+            rtype: RecordType::parse(reader)?,
             version: parse_int8(reader)?,
         })
     }
@@ -184,7 +186,7 @@ pub enum RecordType {
 }
 
 impl RecordType {
-    pub fn read(reader: &mut impl Read) -> Result<Self> {
+    fn parse(reader: &mut impl Read) -> Result<Self> {
         let rtype = parse_int8(reader)?;
 
         let r = match rtype {
@@ -214,7 +216,7 @@ pub struct TopicRecord {
 }
 
 impl TopicRecord {
-    pub fn read(reader: &mut impl Read) -> Result<TopicRecord> {
+    fn parse(reader: &mut impl Read) -> Result<TopicRecord> {
         Ok(TopicRecord {
             topic_name: parse_compact_string(reader)?,
             topic_uuid: Uuid::parse(reader)?,
@@ -239,7 +241,7 @@ pub struct PartitionRecord {
 
 #[allow(dead_code)]
 impl PartitionRecord {
-    pub fn read(reader: &mut impl Read) -> Result<Self> {
+    fn parse(reader: &mut impl Read) -> Result<Self> {
         Ok(PartitionRecord {
             partition_id: parse_int32(reader)?,
             topic_id: Uuid::parse(reader)?,
@@ -263,7 +265,7 @@ pub struct FeatureLevelRecord {
 }
 
 impl FeatureLevelRecord {
-    pub fn read(reader: &mut impl Read) -> Result<FeatureLevelRecord> {
+    fn parse(reader: &mut impl Read) -> Result<FeatureLevelRecord> {
         Ok(FeatureLevelRecord {
             name: parse_compact_string(reader)?,
             feature_level: parse_int16(reader)?,

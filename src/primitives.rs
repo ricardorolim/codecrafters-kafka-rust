@@ -1,5 +1,8 @@
 use core::panic;
-use std::io::{self, Read, Result};
+use std::{
+    fmt::Debug,
+    io::{self, Read, Result},
+};
 
 use crate::api::{Encoder, Parser};
 
@@ -136,6 +139,12 @@ pub struct Uuid {
     pub uuid: [u8; 16],
 }
 
+impl Uuid {
+    pub fn new() -> Self {
+        Uuid { uuid: [0; 16] }
+    }
+}
+
 impl Parser<Self> for Uuid {
     fn parse(reader: &mut impl Read) -> Result<Self> {
         let mut buf = [0; 16];
@@ -152,6 +161,7 @@ impl Encoder for Uuid {
     }
 }
 
+#[derive(Debug)]
 pub struct CompactString(pub String);
 
 impl Parser<Self> for CompactString {
@@ -212,14 +222,21 @@ where
     P: Parser<P>,
     R: Read,
 {
-    let array = parse_compact_array(reader)?;
-    parse_tag_buffer(reader)?;
+    let length = parse_unsigned_varlong(reader)?;
+    let mut array = Vec::new();
+
+    for _ in 0..length - 1 {
+        let item = P::parse(reader)?;
+        array.push(item);
+        parse_tag_buffer(reader)?;
+    }
+
     Ok(array)
 }
 
 pub fn parse_compact_array<P, R>(reader: &mut R) -> Result<Vec<P>>
 where
-    P: Parser<P>,
+    P: Parser<P> + Debug,
     R: Read,
 {
     let length = parse_unsigned_varlong(reader)?;

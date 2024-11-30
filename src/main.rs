@@ -14,7 +14,7 @@ use std::{
 };
 
 use api::{Encoder, Partition};
-use metadata_log::{ClusterMetadataLog, RecordBody, RecordType};
+use metadata_log::{ClusterMetadataLog, RecordBody, RecordType, TopicRecord};
 use primitives::{encode_tag_buffer, parse_nullable_string, parse_tag_buffer, Uuid};
 
 use crate::api::{
@@ -176,21 +176,27 @@ fn handle_describe_topic_partitions(
         .expect("failed to read cluster metadata");
     let metadata = log.lock().unwrap();
 
-    let mut topic_id = Uuid { uuid: [0; 16] };
-    let mut partitions = Vec::new();
-    let mut topic_error_code = ErrorCode::UnknownTopicOrPartition;
+    let mut topics = Vec::new();
+    let mut topic_id = Uuid::new();
 
     for record in metadata.records() {
         if let RecordBody::Topic(topic) = &record {
-            if topic.topic_name == request.topics[0] {
-                topic_error_code = ErrorCode::NoError;
+            if request.topics.contains(&topic.topic_name) {
                 topic_id = topic.topic_uuid.clone();
+
+                topics.push(Topic {
+                    error_code: ErrorCode::NoError,
+                    name: Some(topic.topic_name.clone()),
+                    topic_id: topic_id.clone(),
+                    is_internal: false,
+                    partitions: Vec::new(),
+                    topic_authorized_operations: 0,
+                });
             }
-        }
-        if let RecordBody::Partition(partition) = record {
+        } else if let RecordBody::Partition(partition) = record {
             if partition.topic_id == topic_id {
                 let resp_partition = Partition {
-                    error_code: ErrorCode::NoError as i16,
+                    error_code: ErrorCode::NoError,
                     partition_index: partition.partition_id,
                     leader_id: partition.leader,
                     leader_epoch: partition.leader_epoch,
@@ -201,21 +207,25 @@ fn handle_describe_topic_partitions(
                     offline_replicas: Vec::new(),
                 };
 
-                partitions.push(resp_partition);
+                topics.last_mut().unwrap().partitions.push(resp_partition);
             }
         }
     }
 
+    if topics.len() == 0 {
+        topics.push(Topic {
+            error_code: ErrorCode::UnknownTopicOrPartition,
+            name: Some(request.topics[0].clone()),
+            topic_id: Uuid::new(),
+            is_internal: false,
+            partitions: Vec::new(),
+            topic_authorized_operations: 0,
+        });
+    }
+
     DescribeTopicPartitionsResponse {
         throttle_time_ms: 0,
-        topics: vec![Topic {
-            error_code: topic_error_code,
-            name: Some(request.topics[0].clone()),
-            topic_id,
-            is_internal: false,
-            partitions,
-            topic_authorized_operations: 0,
-        }],
+        topics,
         next_cursor: None,
     }
 }
