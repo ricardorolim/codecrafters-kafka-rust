@@ -13,7 +13,7 @@ use std::{
     thread,
 };
 
-use api::{Encoder, Partition};
+use api::{Encoder, FetchRequest, FetchResponse, Partition};
 use metadata_log::{ClusterMetadataLog, RecordBody, RecordType, TopicRecord};
 use primitives::{encode_tag_buffer, parse_nullable_string, parse_tag_buffer, Uuid};
 
@@ -53,11 +53,13 @@ enum ApiKey {
 }
 
 enum RequestBody {
+    Fetch(FetchRequest),
     ApiVersions(ApiVersionsRequest),
     DescribeTopicPartitions(DescribeTopicPartitionsRequest),
 }
 
 enum ResponseBody {
+    Fetch(FetchResponse),
     ApiVersions(ApiVersionsResponse),
     DescribeTopicPartitions(DescribeTopicPartitionsResponse),
 }
@@ -67,6 +69,10 @@ fn parse_request(message: &[u8]) -> Request {
 
     let header = parse_request_header(&mut cursor);
     let body = match header.request_api_key {
+        value if value == ApiKey::Fetch as i16 => {
+            let req = FetchRequest::parse(&mut cursor).expect("failed to parse Fetch request");
+            RequestBody::Fetch(req)
+        }
         value if value == ApiKey::ApiVersions as i16 => {
             let req = ApiVersionsRequest::parse(&mut cursor)
                 .expect("failed to parse ApiVersions request");
@@ -112,6 +118,10 @@ fn handle_request(
 ) -> Response {
     let mut include_tag_buffer = false;
     let resp_body = match &request.body {
+        RequestBody::Fetch(body) => {
+            let resp = handle_fetch(&request.header, &body);
+            ResponseBody::Fetch(resp)
+        }
         RequestBody::ApiVersions(body) => {
             let resp = handle_apiversions(&request.header, &body);
             ResponseBody::ApiVersions(resp)
@@ -129,6 +139,15 @@ fn handle_request(
             include_tag_buffer,
         },
         body: resp_body,
+    }
+}
+
+fn handle_fetch(_header: &RequestHeader, _body: &FetchRequest) -> FetchResponse {
+    FetchResponse {
+        throttle_time_ms: 0,
+        error_code: ErrorCode::NoError,
+        session_id: 0,
+        responses: vec![],
     }
 }
 
@@ -238,6 +257,7 @@ fn handle_describe_topic_partitions(
 
 fn send(stream: &mut TcpStream, response: &Response) {
     let body = match &response.body {
+        ResponseBody::Fetch(r) => r.encode(),
         ResponseBody::ApiVersions(r) => r.encode(),
         ResponseBody::DescribeTopicPartitions(r) => r.encode(),
     };

@@ -16,6 +16,35 @@ pub trait Encoder {
 }
 
 #[allow(dead_code)]
+pub struct FetchRequest {}
+
+impl Parser<Self> for FetchRequest {
+    fn parse(_reader: &mut impl Read) -> Result<Self> {
+        Ok(FetchRequest {})
+    }
+}
+
+pub struct FetchResponse {
+    pub throttle_time_ms: i32,
+    pub error_code: ErrorCode,
+    pub session_id: i32,
+    pub responses: Vec<i8>,
+}
+
+impl FetchResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buffer: Vec<u8> = Vec::new();
+
+        buffer.extend(self.throttle_time_ms.encode());
+        buffer.extend(self.error_code.encode());
+        buffer.extend(self.session_id.encode());
+        buffer.extend(encode_compact_array(self.responses.clone()));
+        buffer.extend(encode_tag_buffer());
+        buffer
+    }
+}
+
+#[allow(dead_code)]
 pub struct ApiVersionsRequest {
     pub client_software_name: String,
     pub client_software_version: String,
