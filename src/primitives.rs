@@ -23,6 +23,12 @@ pub fn encode_bool(value: bool) -> Vec<u8> {
     buf.to_vec()
 }
 
+pub fn parse_int8(reader: &mut impl Read) -> Result<i8> {
+    let mut buf = [0];
+    reader.read_exact(&mut buf)?;
+    Ok(i8::from_be_bytes(buf))
+}
+
 impl Encoder for i8 {
     fn encode(&self) -> Vec<u8> {
         vec![*self as u8]
@@ -41,6 +47,12 @@ impl Encoder for i16 {
     }
 }
 
+impl Parser<i32> for i32 {
+    fn parse(reader: &mut impl Read) -> Result<i32> {
+        Ok(parse_int32(reader)?)
+    }
+}
+
 pub fn parse_int32(reader: &mut impl Read) -> Result<i32> {
     let mut buf = [0; 4];
     reader.read_exact(&mut buf)?;
@@ -53,7 +65,23 @@ impl Encoder for i32 {
     }
 }
 
-pub fn parse_varint(buf: &mut impl Read) -> Result<u64> {
+pub fn parse_int64(reader: &mut impl Read) -> Result<i64> {
+    let mut buf = [0; 8];
+    reader.read_exact(&mut buf)?;
+    Ok(i64::from_be_bytes(buf))
+}
+
+pub fn parse_varint(buf: &mut impl Read) -> Result<i32> {
+    let num = parse_unsigned_varlong(buf)?;
+    Ok(num as i32)
+}
+
+pub fn parse_unsigned_varint(buf: &mut impl Read) -> Result<u32> {
+    let num = parse_unsigned_varlong(buf)?;
+    Ok(num as u32)
+}
+
+pub fn parse_unsigned_varlong(buf: &mut impl Read) -> Result<u64> {
     let mut length: u8 = 0;
     let mut bytes = vec![];
 
@@ -102,6 +130,28 @@ pub fn encode_varint(mut varint: u64) -> Vec<u8> {
     buf
 }
 
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub struct Uuid {
+    pub uuid: [u8; 16],
+}
+
+impl Parser<Self> for Uuid {
+    fn parse(reader: &mut impl Read) -> Result<Self> {
+        let mut buf = [0; 16];
+        reader.read_exact(&mut buf)?;
+        Ok(Uuid { uuid: buf })
+    }
+}
+
+impl Encoder for Uuid {
+    fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend(self.uuid);
+        buf
+    }
+}
+
 pub struct CompactString(pub String);
 
 impl Parser<Self> for CompactString {
@@ -111,7 +161,7 @@ impl Parser<Self> for CompactString {
 }
 
 pub fn parse_compact_string(buf: &mut impl Read) -> Result<String> {
-    let length = parse_varint(buf)? as usize;
+    let length = parse_unsigned_varlong(buf)? as usize;
     let mut string = vec![0u8; length - 1];
     buf.read_exact(&mut string)?;
 
@@ -157,20 +207,28 @@ pub fn encode_compact_nullable_string(string: Option<String>) -> Vec<u8> {
     buf
 }
 
+pub fn parse_compact_array_with_tag_buffer<P, R>(reader: &mut R) -> Result<Vec<P>>
+where
+    P: Parser<P>,
+    R: Read,
+{
+    let array = parse_compact_array(reader)?;
+    parse_tag_buffer(reader)?;
+    Ok(array)
+}
+
 pub fn parse_compact_array<P, R>(reader: &mut R) -> Result<Vec<P>>
 where
     P: Parser<P>,
     R: Read,
 {
-    let length = parse_varint(reader)?;
+    let length = parse_unsigned_varlong(reader)?;
     let mut array = Vec::new();
 
     for _ in 0..length - 1 {
         let item = P::parse(reader)?;
         array.push(item);
     }
-
-    parse_tag_buffer(reader)?;
 
     Ok(array)
 }
@@ -223,10 +281,10 @@ pub fn encode_nullable_field<T: Encoder>(array: Option<T>) -> Vec<u8> {
 }
 
 // ignoring tag buffers for now
-pub fn parse_tag_buffer(reader: &mut impl Read) -> Result<()> {
+pub fn parse_tag_buffer(reader: &mut impl Read) -> Result<Vec<u8>> {
     let mut buf = [0];
     reader.read_exact(&mut buf)?;
-    Ok(())
+    Ok(Vec::new())
 }
 
 pub fn encode_tag_buffer() -> Vec<u8> {
@@ -237,23 +295,23 @@ pub fn encode_tag_buffer() -> Vec<u8> {
 mod test {
     use std::io::Cursor;
 
-    use crate::primitives::{parse_compact_string, parse_varint};
+    use crate::primitives::{parse_compact_string, parse_unsigned_varlong};
 
     #[test]
     fn test_decode_single_byte_varint() {
         let mut cursor = Cursor::new(&[10]);
-        let value = parse_varint(&mut cursor).unwrap();
+        let value = parse_unsigned_varlong(&mut cursor).unwrap();
         assert_eq!(10, value);
     }
 
     #[test]
     fn test_decode_multi_byte_variant() {
         let mut cursor = Cursor::new(&[0x96, 0x1]);
-        let value = parse_varint(&mut cursor).unwrap();
+        let value = parse_unsigned_varlong(&mut cursor).unwrap();
         assert_eq!(150, value);
 
         let mut cursor = Cursor::new(&[0x80, 0x80, 0x01]);
-        let value = parse_varint(&mut cursor).unwrap();
+        let value = parse_unsigned_varlong(&mut cursor).unwrap();
         assert_eq!(16384, value);
     }
 

@@ -1,20 +1,25 @@
 #![allow(unused_imports)]
 mod api;
+mod metadata_log;
 mod primitives;
 
 use core::panic;
 use std::{
-    io::{Cursor, ErrorKind, Read, Write},
+    env,
+    fs::File,
+    io::{BufReader, Cursor, ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
+    sync::{Arc, Mutex},
     thread,
 };
 
-use api::Encoder;
-use primitives::{encode_tag_buffer, parse_nullable_string, parse_tag_buffer};
+use api::{Encoder, Partition};
+use metadata_log::{ClusterMetadataLog, RecordBody, RecordType};
+use primitives::{encode_tag_buffer, parse_nullable_string, parse_tag_buffer, Uuid};
 
 use crate::api::{
     ApiKeys, ApiVersionsRequest, ApiVersionsResponse, DescribeTopicPartitionsRequest,
-    DescribeTopicPartitionsResponse, ErrorCode, KCursor, Parser, Topic, Uuid,
+    DescribeTopicPartitionsResponse, ErrorCode, KCursor, Parser, Topic,
 };
 
 struct Request {
@@ -60,7 +65,6 @@ fn parse_request(message: &[u8]) -> Request {
     let mut cursor = Cursor::new(message);
 
     let header = parse_request_header(&mut cursor);
-    println!("[parse_request] header={:?}", header);
     let body = match header.request_api_key {
         value if value == ApiKey::ApiVersions as i16 => {
             let req = ApiVersionsRequest::parse(&mut cursor)
@@ -101,7 +105,10 @@ fn parse_request_header(message: &mut impl Read) -> RequestHeader {
     };
 }
 
-fn handle_request(request: &Request) -> Response {
+fn handle_request(
+    request: &Request,
+    metadata_log: &Option<Arc<Mutex<ClusterMetadataLog>>>,
+) -> Response {
     let mut include_tag_buffer = false;
     let resp_body = match &request.body {
         RequestBody::ApiVersions(body) => {
@@ -110,7 +117,7 @@ fn handle_request(request: &Request) -> Response {
         }
         RequestBody::DescribeTopicPartitions(body) => {
             include_tag_buffer = true;
-            let resp = handle_describe_topic_partitions(&request.header, &body);
+            let resp = handle_describe_topic_partitions(&request.header, &body, &metadata_log);
             ResponseBody::DescribeTopicPartitions(resp)
         }
     };
@@ -151,19 +158,68 @@ fn handle_apiversions(header: &RequestHeader, _body: &ApiVersionsRequest) -> Api
 
 fn handle_describe_topic_partitions(
     _: &RequestHeader,
-    body: &DescribeTopicPartitionsRequest,
+    request: &DescribeTopicPartitionsRequest,
+    metadata_log: &Option<Arc<Mutex<ClusterMetadataLog>>>,
 ) -> DescribeTopicPartitionsResponse {
-    let topics = vec![Topic {
-        error_code: ErrorCode::UnknownTopicOrPartition,
-        name: Some(body.topics[0].clone()),
-        topic_id: Uuid { uuid: [0; 16] },
-        is_internal: false,
-        partitions: Vec::new(),
-        topic_authorized_operations: 0,
-    }];
+    if metadata_log.is_none() {
+        return DescribeTopicPartitionsResponse {
+            throttle_time_ms: 0,
+            topics: Vec::new(),
+            next_cursor: None,
+        };
+    }
+
+    let log = metadata_log.as_ref().unwrap();
+    log.lock()
+        .unwrap()
+        .load()
+        .expect("failed to read cluster metadata");
+    let metadata = log.lock().unwrap();
+
+    let mut topic_id = Uuid { uuid: [0; 16] };
+    let mut partitions = Vec::new();
+    let mut topic_error_code = ErrorCode::UnknownTopicOrPartition;
+
+    for record in metadata.records() {
+        if let RecordBody::Topic(topic) = &record {
+            if topic.topic_name == request.topics[0] {
+                topic_error_code = ErrorCode::NoError;
+                topic_id = topic.topic_uuid.clone();
+            }
+        }
+        if let RecordBody::Partition(partition) = record {
+            if topic_error_code != ErrorCode::NoError {
+                break;
+            }
+
+            if partition.topic_id == topic_id {
+                let resp_partition = Partition {
+                    error_code: ErrorCode::NoError as i16,
+                    partition_index: partition.partition_id,
+                    leader_id: partition.leader,
+                    leader_epoch: partition.leader_epoch,
+                    replica_nodes: partition.replicas.clone(),
+                    isr_nodes: partition.isr.clone(),
+                    eligible_leader_replicas: Vec::new(),
+                    last_known_elr: Vec::new(),
+                    offline_replicas: Vec::new(),
+                };
+
+                partitions.push(resp_partition);
+            }
+        }
+    }
+
     DescribeTopicPartitionsResponse {
         throttle_time_ms: 0,
-        topics,
+        topics: vec![Topic {
+            error_code: topic_error_code,
+            name: Some(request.topics[0].clone()),
+            topic_id,
+            is_internal: false,
+            partitions,
+            topic_authorized_operations: 0,
+        }],
         next_cursor: None,
     }
 }
@@ -188,7 +244,7 @@ fn send(stream: &mut TcpStream, response: &Response) {
     stream.write_all(&msg).unwrap();
 }
 
-fn handle_stream(mut stream: TcpStream) {
+fn handle_stream(mut stream: TcpStream, metadata_log: Option<Arc<Mutex<ClusterMetadataLog>>>) {
     loop {
         let mut message_size = [0; 4];
         if let Err(err) = stream.read_exact(&mut message_size) {
@@ -204,18 +260,43 @@ fn handle_stream(mut stream: TcpStream) {
         stream.read_exact(&mut message).unwrap();
 
         let request = parse_request(&message);
-        let response = handle_request(&request);
+        let response = handle_request(&request, &metadata_log);
         send(&mut stream, &response);
+    }
+}
+
+fn parse_args() -> Option<String> {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() > 0 {
+        args.get(1).cloned()
+    } else {
+        None
+    }
+}
+
+fn metadata_log() -> Option<ClusterMetadataLog> {
+    let logfile = "/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log";
+    let props_file = parse_args();
+
+    match props_file {
+        Some(_) => {
+            let metadata_log = ClusterMetadataLog::new(logfile);
+            Some(metadata_log)
+        }
+        None => None,
     }
 }
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:9092").unwrap();
+    let metadata_log = metadata_log().map(|log| Arc::new(Mutex::new(log)));
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                thread::spawn(|| handle_stream(stream));
+                let ml = metadata_log.as_ref().map(|log| Arc::clone(log));
+                thread::spawn(|| handle_stream(stream, ml));
             }
             Err(e) => {
                 println!("error: {}", e);

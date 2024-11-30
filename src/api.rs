@@ -2,9 +2,9 @@ use std::io::{BufReader, Cursor, Read, Result, Write};
 
 use crate::primitives::{
     encode_bool, encode_compact_array, encode_compact_nullable_string, encode_compact_string,
-    encode_nullable_field, encode_tag_buffer, encode_varint, parse_bool, parse_compact_array,
-    parse_compact_string, parse_int16, parse_int32, parse_nullable_field, parse_tag_buffer,
-    CompactString,
+    encode_nullable_field, encode_tag_buffer, encode_varint, parse_bool,
+    parse_compact_array_with_tag_buffer, parse_compact_string, parse_int16, parse_int32,
+    parse_int8, parse_nullable_field, parse_tag_buffer, CompactString, Uuid,
 };
 
 pub trait Parser<T> {
@@ -76,7 +76,7 @@ pub struct DescribeTopicPartitionsRequest {
 impl Parser<Self> for DescribeTopicPartitionsRequest {
     fn parse(reader: &mut impl Read) -> Result<Self> {
         Ok(DescribeTopicPartitionsRequest {
-            topics: parse_compact_array(reader)?
+            topics: parse_compact_array_with_tag_buffer(reader)?
                 .into_iter()
                 .map(|s: CompactString| s.0)
                 .collect(),
@@ -146,7 +146,7 @@ impl Parser<Self> for Topic {
             name: Some(parse_compact_string(reader)?),
             topic_id: Uuid::parse(reader)?,
             is_internal: parse_bool(reader)?,
-            partitions: parse_compact_array(reader)?,
+            partitions: parse_compact_array_with_tag_buffer(reader)?,
             topic_authorized_operations: parse_int32(reader)?,
         })
     }
@@ -166,7 +166,7 @@ impl Encoder for Topic {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 #[repr(i16)]
 pub enum ErrorCode {
     NoError = 0,
@@ -201,38 +201,16 @@ impl Encoder for ErrorCode {
 
 #[derive(Clone)]
 #[allow(dead_code)]
-pub struct Uuid {
-    pub uuid: [u8; 16],
-}
-
-impl Parser<Self> for Uuid {
-    fn parse(reader: &mut impl Read) -> Result<Self> {
-        let mut buf = [0; 16];
-        reader.read_exact(&mut buf)?;
-        Ok(Uuid { uuid: buf })
-    }
-}
-
-impl Encoder for Uuid {
-    fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend(self.uuid);
-        buf
-    }
-}
-
-#[derive(Clone)]
-#[allow(dead_code)]
 pub struct Partition {
     pub error_code: i16,
     pub partition_index: i32,
     pub leader_id: i32,
     pub leader_epoch: i32,
-    pub replica_nodes: i32,
-    pub isr_nodes: i32,
-    pub eligible_leader_replicas: i32,
-    pub last_known_elr: i32,
-    pub offline_replicas: i32,
+    pub replica_nodes: Vec<i32>,
+    pub isr_nodes: Vec<i32>,
+    pub eligible_leader_replicas: Vec<i32>,
+    pub last_known_elr: Vec<i32>,
+    pub offline_replicas: Vec<i32>,
 }
 
 impl Parser<Self> for Partition {
@@ -242,11 +220,11 @@ impl Parser<Self> for Partition {
             partition_index: parse_int32(reader)?,
             leader_id: parse_int32(reader)?,
             leader_epoch: parse_int32(reader)?,
-            replica_nodes: parse_int32(reader)?,
-            isr_nodes: parse_int32(reader)?,
-            eligible_leader_replicas: parse_int32(reader)?,
-            last_known_elr: parse_int32(reader)?,
-            offline_replicas: parse_int32(reader)?,
+            replica_nodes: parse_compact_array_with_tag_buffer(reader)?,
+            isr_nodes: parse_compact_array_with_tag_buffer(reader)?,
+            eligible_leader_replicas: parse_compact_array_with_tag_buffer(reader)?,
+            last_known_elr: parse_compact_array_with_tag_buffer(reader)?,
+            offline_replicas: parse_compact_array_with_tag_buffer(reader)?,
         })
     }
 }
@@ -258,11 +236,12 @@ impl Encoder for Partition {
         buf.extend(self.partition_index.encode());
         buf.extend(self.leader_id.encode());
         buf.extend(self.leader_epoch.encode());
-        buf.extend(self.replica_nodes.encode());
-        buf.extend(self.isr_nodes.encode());
-        buf.extend(self.eligible_leader_replicas.encode());
-        buf.extend(self.last_known_elr.encode());
-        buf.extend(self.offline_replicas.encode());
+        buf.extend(encode_compact_array(self.replica_nodes.clone()));
+        buf.extend(encode_compact_array(self.isr_nodes.clone()));
+        buf.extend(encode_compact_array(self.eligible_leader_replicas.clone()));
+        buf.extend(encode_compact_array(self.last_known_elr.clone()));
+        buf.extend(encode_compact_array(self.offline_replicas.clone()));
+        buf.extend(encode_tag_buffer());
         buf
     }
 }
