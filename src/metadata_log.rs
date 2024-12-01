@@ -61,6 +61,19 @@ impl ClusterMetadataLog {
             .map(|record| record.value.body.clone())
             .collect()
     }
+
+    pub fn topics(&self) -> Vec<TopicRecord> {
+        self.records()
+            .iter()
+            .filter_map(|record| {
+                if let RecordBody::Topic(topic) = record {
+                    Some(topic.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 #[allow(dead_code)]

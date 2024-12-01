@@ -338,7 +338,7 @@ impl Encoder for Topic {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum ErrorCode {
     NoError = 0,
     UnknownTopicOrPartition = 3,

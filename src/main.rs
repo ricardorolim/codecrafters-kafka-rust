@@ -114,14 +114,11 @@ fn parse_request_header(message: &mut impl Read) -> RequestHeader {
     };
 }
 
-fn handle_request(
-    request: &Request,
-    metadata_log: &Option<Arc<Mutex<ClusterMetadataLog>>>,
-) -> Response {
+fn handle_request(request: &Request, metadata_log: &Arc<Mutex<ClusterMetadataLog>>) -> Response {
     let mut include_tag_buffer = true;
     let resp_body = match &request.body {
         RequestBody::Fetch(body) => {
-            let resp = handle_fetch(&request.header, &body);
+            let resp = handle_fetch(&request.header, &body, metadata_log);
             ResponseBody::Fetch(resp)
         }
         RequestBody::ApiVersions(body) => {
@@ -130,7 +127,7 @@ fn handle_request(
             ResponseBody::ApiVersions(resp)
         }
         RequestBody::DescribeTopicPartitions(body) => {
-            let resp = handle_describe_topic_partitions(&request.header, &body, &metadata_log);
+            let resp = handle_describe_topic_partitions(&request.header, &body, metadata_log);
             ResponseBody::DescribeTopicPartitions(resp)
         }
     };
@@ -144,26 +141,43 @@ fn handle_request(
     }
 }
 
-fn handle_fetch(_header: &RequestHeader, request: &FetchRequest) -> FetchResponse {
+fn handle_fetch(
+    _header: &RequestHeader,
+    request: &FetchRequest,
+    metadata_log: &Arc<Mutex<ClusterMetadataLog>>,
+) -> FetchResponse {
     match request.topics.first() {
-        Some(t) => FetchResponse {
-            throttle_time_ms: 0,
-            error_code: ErrorCode::NoError,
-            session_id: 0,
-            responses: vec![FetchResponseResponse {
-                topic_id: t.topic_id.clone(),
-                partitions: vec![FetchResponsePartition {
-                    partition_index: 0,
-                    error_code: ErrorCode::UnknownTopic,
-                    high_watermark: 0,
-                    last_stable_offset: 0,
-                    log_start_offset: 0,
-                    aborted_transactions: vec![],
-                    preferred_read_replica: 0,
-                    records: vec![],
+        Some(topic) => {
+            let error_code = if metadata_log
+                .lock()
+                .unwrap()
+                .topics()
+                .iter()
+                .any(|t| topic.topic_id == t.topic_uuid)
+            {
+                ErrorCode::NoError
+            } else {
+                ErrorCode::UnknownTopic
+            };
+            FetchResponse {
+                throttle_time_ms: 0,
+                error_code: ErrorCode::NoError,
+                session_id: 0,
+                responses: vec![FetchResponseResponse {
+                    topic_id: topic.topic_id.clone(),
+                    partitions: vec![FetchResponsePartition {
+                        partition_index: 0,
+                        error_code,
+                        high_watermark: 0,
+                        last_stable_offset: 0,
+                        log_start_offset: 0,
+                        aborted_transactions: vec![],
+                        preferred_read_replica: 0,
+                        records: vec![],
+                    }],
                 }],
-            }],
-        },
+            }
+        }
         None => FetchResponse {
             throttle_time_ms: 0,
             error_code: ErrorCode::NoError,
@@ -206,22 +220,9 @@ fn handle_apiversions(header: &RequestHeader, _body: &ApiVersionsRequest) -> Api
 fn handle_describe_topic_partitions(
     _: &RequestHeader,
     request: &DescribeTopicPartitionsRequest,
-    metadata_log: &Option<Arc<Mutex<ClusterMetadataLog>>>,
+    metadata_log: &Arc<Mutex<ClusterMetadataLog>>,
 ) -> DescribeTopicPartitionsResponse {
-    if metadata_log.is_none() {
-        return DescribeTopicPartitionsResponse {
-            throttle_time_ms: 0,
-            topics: Vec::new(),
-            next_cursor: None,
-        };
-    }
-
-    let log = metadata_log.as_ref().unwrap();
-    log.lock()
-        .unwrap()
-        .load()
-        .expect("failed to read cluster metadata");
-    let metadata = log.lock().unwrap();
+    let metadata = metadata_log.lock().unwrap();
 
     let mut topics = Vec::new();
     let mut topic_id = Uuid::new();
@@ -297,7 +298,7 @@ fn send(stream: &mut TcpStream, response: &Response) {
     stream.write_all(&msg).unwrap();
 }
 
-fn handle_stream(mut stream: TcpStream, metadata_log: Option<Arc<Mutex<ClusterMetadataLog>>>) {
+fn handle_stream(mut stream: TcpStream, metadata_log: Arc<Mutex<ClusterMetadataLog>>) {
     loop {
         let mut message_size = [0; 4];
         if let Err(err) = stream.read_exact(&mut message_size) {
@@ -328,28 +329,32 @@ fn parse_args() -> Option<String> {
     }
 }
 
-fn metadata_log() -> Option<ClusterMetadataLog> {
+fn metadata_log() -> ClusterMetadataLog {
     let logfile = "/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log";
     let props_file = parse_args();
 
     match props_file {
-        Some(_) => {
-            let metadata_log = ClusterMetadataLog::new(logfile);
-            Some(metadata_log)
-        }
-        None => None,
+        Some(_) => ClusterMetadataLog::new(logfile),
+        None => panic!("no properties file argument"),
     }
 }
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:9092").unwrap();
-    let metadata_log = metadata_log().map(|log| Arc::new(Mutex::new(log)));
+    let metadata_log = Arc::new(Mutex::new(metadata_log()));
 
     for stream in listener.incoming() {
+        metadata_log
+            .as_ref()
+            .lock()
+            .unwrap()
+            .load()
+            .expect("failed to read cluster metadata");
+
         match stream {
             Ok(stream) => {
-                let ml = metadata_log.as_ref().map(|log| Arc::clone(log));
-                thread::spawn(|| handle_stream(stream, ml));
+                let log = Arc::clone(&metadata_log);
+                thread::spawn(|| handle_stream(stream, log));
             }
             Err(e) => {
                 println!("error: {}", e);
