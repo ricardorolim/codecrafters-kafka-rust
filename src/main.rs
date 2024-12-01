@@ -13,7 +13,9 @@ use std::{
     thread,
 };
 
-use api::{Encoder, FetchRequest, FetchResponse, Partition};
+use api::{
+    Encoder, FetchRequest, FetchResponse, FetchResponsePartition, FetchResponseResponse, Partition,
+};
 use metadata_log::{ClusterMetadataLog, RecordBody, RecordType, TopicRecord};
 use primitives::{encode_tag_buffer, parse_nullable_string, parse_tag_buffer, Uuid};
 
@@ -116,18 +118,18 @@ fn handle_request(
     request: &Request,
     metadata_log: &Option<Arc<Mutex<ClusterMetadataLog>>>,
 ) -> Response {
-    let mut include_tag_buffer = false;
+    let mut include_tag_buffer = true;
     let resp_body = match &request.body {
         RequestBody::Fetch(body) => {
             let resp = handle_fetch(&request.header, &body);
             ResponseBody::Fetch(resp)
         }
         RequestBody::ApiVersions(body) => {
+            include_tag_buffer = false;
             let resp = handle_apiversions(&request.header, &body);
             ResponseBody::ApiVersions(resp)
         }
         RequestBody::DescribeTopicPartitions(body) => {
-            include_tag_buffer = true;
             let resp = handle_describe_topic_partitions(&request.header, &body, &metadata_log);
             ResponseBody::DescribeTopicPartitions(resp)
         }
@@ -142,12 +144,32 @@ fn handle_request(
     }
 }
 
-fn handle_fetch(_header: &RequestHeader, _body: &FetchRequest) -> FetchResponse {
-    FetchResponse {
-        throttle_time_ms: 0,
-        error_code: ErrorCode::NoError,
-        session_id: 0,
-        responses: vec![],
+fn handle_fetch(_header: &RequestHeader, request: &FetchRequest) -> FetchResponse {
+    match request.topics.first() {
+        Some(t) => FetchResponse {
+            throttle_time_ms: 0,
+            error_code: ErrorCode::NoError,
+            session_id: 0,
+            responses: vec![FetchResponseResponse {
+                topic_id: t.topic_id.clone(),
+                partitions: vec![FetchResponsePartition {
+                    partition_index: 0,
+                    error_code: ErrorCode::UnknownTopic,
+                    high_watermark: 0,
+                    last_stable_offset: 0,
+                    log_start_offset: 0,
+                    aborted_transactions: vec![],
+                    preferred_read_replica: 0,
+                    records: vec![],
+                }],
+            }],
+        },
+        None => FetchResponse {
+            throttle_time_ms: 0,
+            error_code: ErrorCode::NoError,
+            session_id: 0,
+            responses: vec![],
+        },
     }
 }
 
@@ -270,7 +292,6 @@ fn send(stream: &mut TcpStream, response: &Response) {
     }
 
     msg.extend(body);
-    msg.extend(encode_tag_buffer());
 
     stream.write_all(&(msg.len() as i32).encode()).unwrap();
     stream.write_all(&msg).unwrap();

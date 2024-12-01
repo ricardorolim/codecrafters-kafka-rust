@@ -74,6 +74,12 @@ pub fn parse_int64(reader: &mut impl Read) -> Result<i64> {
     Ok(i64::from_be_bytes(buf))
 }
 
+impl Encoder for i64 {
+    fn encode(&self) -> Vec<u8> {
+        self.to_be_bytes().to_vec()
+    }
+}
+
 pub fn parse_varint(buf: &mut impl Read) -> Result<i32> {
     let num = parse_unsigned_varlong(buf)?;
     Ok(num as i32)
@@ -178,7 +184,7 @@ pub fn parse_compact_string(buf: &mut impl Read) -> Result<String> {
     Ok(String::from_utf8(string).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?)
 }
 
-pub fn encode_compact_string(string: String) -> Vec<u8> {
+pub fn encode_compact_string(string: &str) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend(encode_varint(buf.len() as u64 + 1));
     buf.extend(string.bytes());
@@ -200,7 +206,7 @@ pub fn parse_nullable_string(reader: &mut impl Read) -> Result<String> {
     Ok(String::from_utf8(string).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?)
 }
 
-pub fn encode_compact_nullable_string(string: Option<String>) -> Vec<u8> {
+pub fn encode_compact_nullable_string(string: &Option<String>) -> Vec<u8> {
     let mut buf = Vec::new();
 
     match string {
@@ -236,7 +242,7 @@ where
 
 pub fn parse_compact_array<P, R>(reader: &mut R) -> Result<Vec<P>>
 where
-    P: Parser<P> + Debug,
+    P: Parser<P>,
     R: Read,
 {
     let length = parse_unsigned_varlong(reader)?;
@@ -250,7 +256,7 @@ where
     Ok(array)
 }
 
-pub fn encode_compact_array<T: Encoder>(array: Vec<T>) -> Vec<u8> {
+pub fn encode_compact_array<T: Encoder>(array: &[T]) -> Vec<u8> {
     let mut res = Vec::new();
 
     if array.is_empty() {
@@ -282,7 +288,7 @@ where
     Ok(Some(P::parse(reader)?))
 }
 
-pub fn encode_nullable_field<T: Encoder>(array: Option<T>) -> Vec<u8> {
+pub fn encode_nullable_field<T: Encoder>(array: &Option<T>) -> Vec<u8> {
     let mut buf = Vec::new();
 
     match array {
