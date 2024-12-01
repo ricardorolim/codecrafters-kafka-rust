@@ -148,17 +148,20 @@ fn handle_fetch(
 ) -> FetchResponse {
     match request.topics.first() {
         Some(topic) => {
-            let error_code = if metadata_log
+            let message_data = metadata_log
                 .lock()
                 .unwrap()
-                .topics()
-                .iter()
-                .any(|t| topic.topic_id == t.topic_uuid)
-            {
-                ErrorCode::NoError
-            } else {
-                ErrorCode::UnknownTopic
-            };
+                .message(&topic.topic_id)
+                .expect("unable to read record batch");
+
+            let mut error_code = ErrorCode::UnknownTopic;
+            let mut records = Vec::new();
+
+            if let Some(r) = message_data {
+                records = r;
+                error_code = ErrorCode::NoError;
+            }
+
             FetchResponse {
                 throttle_time_ms: 0,
                 error_code: ErrorCode::NoError,
@@ -173,7 +176,7 @@ fn handle_fetch(
                         log_start_offset: 0,
                         aborted_transactions: vec![],
                         preferred_read_replica: 0,
-                        records: vec![],
+                        records,
                     }],
                 }],
             }

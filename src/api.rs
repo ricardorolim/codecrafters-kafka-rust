@@ -153,7 +153,7 @@ pub struct FetchResponsePartition {
     pub log_start_offset: i64,
     pub aborted_transactions: Vec<AbortedTransaction>,
     pub preferred_read_replica: i32,
-    pub records: Vec<CompactRecord>,
+    pub records: Vec<u8>,
 }
 
 impl Encoder for FetchResponsePartition {

@@ -1,6 +1,7 @@
 use core::panic;
 use std::{
     collections::binary_heap::Iter,
+    fmt::format,
     fs::File,
     io::{BufRead, BufReader, Read, Result},
 };
@@ -21,7 +22,7 @@ use crate::{
 pub struct ClusterMetadataLog {
     logfile: String,
     loaded: bool,
-    pub batches: Vec<Batch>,
+    pub batches: Vec<RecordBatch>,
 }
 
 impl ClusterMetadataLog {
@@ -45,7 +46,7 @@ impl ClusterMetadataLog {
         let mut batches = Vec::new();
 
         while !reader.fill_buf()?.is_empty() {
-            batches.push(Batch::parse(&mut reader)?);
+            batches.push(RecordBatch::parse(&mut reader)?);
         }
 
         self.batches = batches;
@@ -74,11 +75,34 @@ impl ClusterMetadataLog {
             })
             .collect()
     }
+
+    pub fn message(&self, topic_uuid: &Uuid) -> Result<Option<Vec<u8>>> {
+        let name = self.topics().iter().find_map(|t| {
+            if t.topic_uuid == *topic_uuid {
+                Some(t.topic_name.clone())
+            } else {
+                None
+            }
+        });
+
+        if name.is_none() {
+            return Ok(None);
+        }
+
+        let filename = format!(
+            "/tmp/kraft-combined-logs/{}-0/00000000000000000000.log",
+            name.unwrap(),
+        );
+        let mut file = File::open(&filename)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        Ok(Some(buffer))
+    }
 }
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub struct Batch {
+pub struct RecordBatch {
     base_offset: i64,
     base_length: i32,
     partition_leader_epoch: i32,
@@ -94,9 +118,9 @@ pub struct Batch {
     pub records: Vec<Record>,
 }
 
-impl Batch {
-    pub fn parse(reader: &mut impl Read) -> Result<Batch> {
-        Ok(Batch {
+impl RecordBatch {
+    pub fn parse(reader: &mut impl Read) -> Result<RecordBatch> {
+        Ok(RecordBatch {
             base_offset: parse_int64(reader)?,
             base_length: parse_int32(reader)?,
             partition_leader_epoch: parse_int32(reader)?,

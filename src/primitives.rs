@@ -38,6 +38,12 @@ impl Encoder for i8 {
     }
 }
 
+impl Encoder for u8 {
+    fn encode(&self) -> Vec<u8> {
+        vec![*self]
+    }
+}
+
 pub fn parse_int16(reader: &mut impl Read) -> Result<i16> {
     let mut buf = [0; 2];
     reader.read_exact(&mut buf)?;
